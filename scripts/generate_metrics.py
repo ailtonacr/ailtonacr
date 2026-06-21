@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate self-hosted GitHub profile activity cards from the GraphQL API."""
+"""Generate compact, self-hosted GitHub profile charts from the GraphQL API."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -20,53 +20,36 @@ OUTPUT_DIR = Path(os.getenv("METRICS_OUTPUT_DIR", "assets"))
 TOKEN = os.getenv("GH_TOKEN", "")
 
 QUERY = """
-query ProfileMetrics($login: String!, $from: DateTime!, $to: DateTime!) {
+query ProfileCharts($login: String!, $from: DateTime!, $to: DateTime!) {
   user(login: $login) {
     login
     name
-    url
-    followers { totalCount }
     repositories(
       first: 100
       ownerAffiliations: OWNER
-      privacy: PUBLIC
       isFork: false
       orderBy: { field: UPDATED_AT, direction: DESC }
     ) {
-      totalCount
       nodes {
-        nameWithOwner
-        url
-        stargazerCount
-        forkCount
-        updatedAt
-        primaryLanguage { name color }
+        isPrivate
+        languages(first: 20, orderBy: { field: SIZE, direction: DESC }) {
+          edges {
+            size
+            node { name color }
+          }
+        }
       }
     }
     contributionsCollection(from: $from, to: $to) {
-      totalCommitContributions
-      totalIssueContributions
-      totalPullRequestContributions
-      totalPullRequestReviewContributions
       restrictedContributionsCount
       contributionCalendar {
         totalContributions
         weeks {
           contributionDays {
             contributionCount
-            contributionLevel
             date
-            weekday
           }
         }
-      }
-      commitContributionsByRepository(maxRepositories: 20) {
-        repository { nameWithOwner url isPrivate owner { login } }
-        contributions(first: 1) { totalCount }
-      }
-      pullRequestContributionsByRepository(maxRepositories: 20) {
-        repository { nameWithOwner url isPrivate owner { login } }
-        contributions(first: 1) { totalCount }
       }
     }
   }
@@ -75,45 +58,34 @@ query ProfileMetrics($login: String!, $from: DateTime!, $to: DateTime!) {
 
 THEMES = {
     "light": {
-        "background": "#ffffff",
-        "border": "#d0d7de",
         "text": "#1f2328",
         "muted": "#656d76",
-        "accent": "#0969da",
-        "panel": "#f6f8fa",
-        "levels": ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"],
+        "grid": "#d8dee4",
+        "track": "#eaeef2",
+        "activity": "#0969da",
+        "activity_fill": "#ddf4ff",
     },
     "dark": {
-        "background": "#0d1117",
-        "border": "#30363d",
         "text": "#e6edf3",
         "muted": "#8b949e",
-        "accent": "#58a6ff",
-        "panel": "#161b22",
-        "levels": ["#161b22", "#0e4429", "#006d32", "#26a641", "#39d353"],
+        "grid": "#30363d",
+        "track": "#21262d",
+        "activity": "#58a6ff",
+        "activity_fill": "#16324f",
     },
 }
 
-LEVEL_INDEX = {
-    "NONE": 0,
-    "FIRST_QUARTILE": 1,
-    "SECOND_QUARTILE": 2,
-    "THIRD_QUARTILE": 3,
-    "FOURTH_QUARTILE": 4,
-}
-
-
-@dataclass(frozen=True)
-class Day:
-    value: date
-    count: int
-    level: int
-    weekday: int
+FALLBACK_COLORS = ["#3572A5", "#f1e05a", "#00ADD8", "#3178c6", "#e34c26", "#663399"]
+MONTH_NAMES = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 
 
 def fail(message: str) -> None:
     print(f"metrics: {message}", file=sys.stderr)
     raise SystemExit(1)
+
+
+def esc(value: object) -> str:
+    return html.escape(str(value), quote=True)
 
 
 def fetch_metrics() -> dict[str, Any]:
@@ -128,12 +100,11 @@ def fetch_metrics() -> dict[str, Any]:
     }
     request = urllib.request.Request(
         API_URL,
-        data=json.dumps({"query": QUERY, "variables": variables}).encode("utf-8"),
+        data=json.dumps({"query": QUERY, "variables": variables}).encode(),
         headers={
             "Authorization": f"Bearer {TOKEN}",
             "Content-Type": "application/json",
-            "User-Agent": f"{USERNAME}-profile-metrics",
-            "X-Github-Next-Global-ID": "1",
+            "User-Agent": f"{USERNAME}-profile-charts",
         },
         method="POST",
     )
@@ -156,206 +127,174 @@ def fetch_metrics() -> dict[str, Any]:
     return user
 
 
-def parse_days(calendar: dict[str, Any]) -> list[Day]:
-    days: list[Day] = []
+def aggregate_languages(user: dict[str, Any]) -> tuple[list[dict[str, Any]], int, int]:
+    totals: dict[str, int] = defaultdict(int)
+    repository_counts: dict[str, int] = defaultdict(int)
+    colors: dict[str, str] = {}
+    repositories_analyzed = 0
+    private_repositories = 0
+
+    for repository in user.get("repositories", {}).get("nodes", []):
+        edges = (repository.get("languages") or {}).get("edges", [])
+        if not edges:
+            continue
+        repositories_analyzed += 1
+        private_repositories += int(bool(repository.get("isPrivate")))
+        seen: set[str] = set()
+        for edge in edges:
+            language = edge.get("node") or {}
+            name = language.get("name")
+            size = int(edge.get("size") or 0)
+            if not name or size <= 0:
+                continue
+            totals[name] += size
+            colors[name] = language.get("color") or colors.get(name, "")
+            if name not in seen:
+                repository_counts[name] += 1
+                seen.add(name)
+
+    total_bytes = sum(totals.values())
+    if not total_bytes:
+        return [], repositories_analyzed, private_repositories
+
+    languages = [
+        {
+            "name": name,
+            "bytes": size,
+            "percentage": size / total_bytes * 100,
+            "repositories": repository_counts[name],
+            "color": colors.get(name),
+        }
+        for name, size in totals.items()
+    ]
+    languages.sort(key=lambda item: (-item["bytes"], -item["repositories"], item["name"]))
+    return languages[:6], repositories_analyzed, private_repositories
+
+
+def monthly_activity(user: dict[str, Any]) -> tuple[list[dict[str, Any]], int, int]:
+    calendar = user["contributionsCollection"]["contributionCalendar"]
+    now = datetime.now(timezone.utc).date()
+    months: list[tuple[int, int]] = []
+    year, month = now.year, now.month
+    for offset in range(11, -1, -1):
+        absolute = year * 12 + month - 1 - offset
+        months.append((absolute // 12, absolute % 12 + 1))
+
+    counts = {key: 0 for key in months}
     for week in calendar.get("weeks", []):
         for item in week.get("contributionDays", []):
-            days.append(
-                Day(
-                    value=date.fromisoformat(item["date"]),
-                    count=int(item["contributionCount"]),
-                    level=LEVEL_INDEX.get(item["contributionLevel"], 0),
-                    weekday=int(item["weekday"]),
-                )
+            day = date.fromisoformat(item["date"])
+            key = (day.year, day.month)
+            if key in counts:
+                counts[key] += int(item["contributionCount"])
+
+    result = [
+        {"label": MONTH_NAMES[key[1] - 1], "year": key[0], "count": counts[key]}
+        for key in months
+    ]
+    return (
+        result,
+        int(calendar.get("totalContributions", 0)),
+        int(user["contributionsCollection"].get("restrictedContributionsCount", 0)),
+    )
+
+
+def language_chart(languages: list[dict[str, Any]], theme: dict[str, str]) -> str:
+    if not languages:
+        return '<text x="28" y="135" class="muted">Nenhuma linguagem disponível para análise.</text>'
+
+    markup: list[str] = []
+    x = 28
+    track_x = 172
+    track_width = 260
+    start_y = 92
+    row_height = 37
+
+    for index, language in enumerate(languages):
+        y = start_y + index * row_height
+        percentage = language["percentage"]
+        width = max(3, track_width * percentage / 100)
+        color = language["color"] or FALLBACK_COLORS[index % len(FALLBACK_COLORS)]
+        detail = f"{percentage:.1f}% · {language['repositories']} repo"
+        if language["repositories"] != 1:
+            detail += "s"
+        markup.append(
+            f'<circle cx="{x + 5}" cy="{y - 4}" r="5" fill="{esc(color)}"/>'
+            f'<text x="{x + 18}" y="{y}" class="label">{esc(language["name"])}</text>'
+            f'<rect x="{track_x}" y="{y - 12}" width="{track_width}" height="10" rx="5" fill="{theme["track"]}"/>'
+            f'<rect x="{track_x}" y="{y - 12}" width="{width:.1f}" height="10" rx="5" fill="{esc(color)}"/>'
+            f'<text x="{track_x + track_width}" y="{y + 15}" text-anchor="end" class="small">{esc(detail)}</text>'
+        )
+    return "".join(markup)
+
+
+def activity_chart(months: list[dict[str, Any]], theme: dict[str, str]) -> str:
+    chart_x = 526
+    chart_y = 94
+    chart_width = 420
+    chart_height = 180
+    max_count = max((month["count"] for month in months), default=0) or 1
+    gap = 8
+    bar_width = (chart_width - gap * (len(months) - 1)) / len(months)
+    markup: list[str] = []
+
+    for grid_index in range(4):
+        y = chart_y + grid_index * chart_height / 3
+        markup.append(
+            f'<line x1="{chart_x}" y1="{y:.1f}" x2="{chart_x + chart_width}" y2="{y:.1f}" '
+            f'stroke="{theme["grid"]}" stroke-width="1" opacity="0.65"/>'
+        )
+
+    for index, month in enumerate(months):
+        x = chart_x + index * (bar_width + gap)
+        height = chart_height * month["count"] / max_count
+        y = chart_y + chart_height - height
+        opacity = 1 if month["count"] else 0.28
+        markup.append(
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_width:.1f}" height="{max(2, height):.1f}" '
+            f'rx="4" fill="{theme["activity"]}" opacity="{opacity}">'
+            f'<title>{esc(month["label"])} {month["year"]}: {month["count"]} contribuições</title></rect>'
+            f'<text x="{x + bar_width / 2:.1f}" y="{chart_y + chart_height + 22}" '
+            f'text-anchor="middle" class="small">{esc(month["label"])}</text>'
+        )
+        if month["count"]:
+            markup.append(
+                f'<text x="{x + bar_width / 2:.1f}" y="{max(chart_y + 13, y - 6):.1f}" '
+                f'text-anchor="middle" class="count">{month["count"]}</text>'
             )
-    return sorted(days, key=lambda item: item.value)
-
-
-def streaks(days: list[Day]) -> tuple[int, int]:
-    longest = 0
-    running = 0
-    for day in days:
-        if day.count:
-            running += 1
-            longest = max(longest, running)
-        else:
-            running = 0
-
-    current = 0
-    meaningful_days = list(days)
-    if meaningful_days and meaningful_days[-1].value == datetime.now(timezone.utc).date():
-        meaningful_days = meaningful_days[:-1]
-    for day in reversed(meaningful_days):
-        if not day.count:
-            break
-        current += 1
-    return current, longest
-
-
-def public_external_repositories(collection: dict[str, Any]) -> list[tuple[str, str, int]]:
-    repositories: dict[str, tuple[str, int]] = {}
-    groups = (
-        collection.get("commitContributionsByRepository", []),
-        collection.get("pullRequestContributionsByRepository", []),
-    )
-    for group in groups:
-        for item in group:
-            repository = item.get("repository") or {}
-            owner = (repository.get("owner") or {}).get("login", "")
-            if repository.get("isPrivate") or owner.lower() == USERNAME.lower():
-                continue
-            name = repository.get("nameWithOwner")
-            url = repository.get("url")
-            if not name or not url:
-                continue
-            total = int((item.get("contributions") or {}).get("totalCount", 0))
-            previous_url, previous_total = repositories.get(name, (url, 0))
-            repositories[name] = (previous_url, previous_total + total)
-    return sorted(
-        ((name, url, total) for name, (url, total) in repositories.items()),
-        key=lambda item: (-item[2], item[0].lower()),
-    )
-
-
-def esc(value: object) -> str:
-    return html.escape(str(value), quote=True)
-
-
-def metric_card(x: int, y: int, width: int, label: str, value: object, theme: dict[str, str]) -> str:
-    return f"""
-    <g transform="translate({x} {y})">
-      <rect width="{width}" height="82" rx="8" fill="{theme['panel']}" stroke="{theme['border']}"/>
-      <text x="18" y="32" class="label">{esc(label)}</text>
-      <text x="18" y="62" class="value">{esc(value)}</text>
-    </g>"""
+    return "".join(markup)
 
 
 def render_svg(user: dict[str, Any], mode: str) -> str:
     theme = THEMES[mode]
-    collection = user["contributionsCollection"]
-    calendar = collection["contributionCalendar"]
-    days = parse_days(calendar)
-    current_streak, longest_streak = streaks(days)
-    active_days = sum(day.count > 0 for day in days)
-    busiest = max(days, key=lambda day: day.count, default=Day(date.today(), 0, 0, 0))
-    external = public_external_repositories(collection)
+    languages, repositories_analyzed, private_repositories = aggregate_languages(user)
+    months, total_contributions, private_contributions = monthly_activity(user)
+    generated = datetime.now(timezone.utc).strftime("%d/%m/%Y")
+    access_note = f"{repositories_analyzed} repositórios analisados"
+    if private_repositories:
+        access_note += f" · {private_repositories} privados"
+    activity_note = f"{total_contributions} contribuições em 12 meses"
+    if private_contributions:
+        activity_note += f" · {private_contributions} privadas"
 
-    total = int(calendar["totalContributions"])
-    private = int(collection.get("restrictedContributionsCount", 0))
-    commits = int(collection["totalCommitContributions"])
-    pull_requests = int(collection["totalPullRequestContributions"])
-    reviews = int(collection["totalPullRequestReviewContributions"])
-    issues = int(collection["totalIssueContributions"])
-    public_repositories = int(user["repositories"]["totalCount"])
-
-    width = 980
-    height = 590 if external else 548
-    cards = [
-        ("Contribuições", total),
-        ("Commits", commits),
-        ("Pull requests", pull_requests),
-        ("Reviews", reviews),
-        ("Issues", issues),
-        ("Contribuições privadas", private),
-    ]
-
-    card_width = 142
-    card_gap = 14
-    card_start = 28
-    card_markup = "".join(
-        metric_card(card_start + index * (card_width + card_gap), 92, card_width, label, value, theme)
-        for index, (label, value) in enumerate(cards)
-    )
-
-    square = 11
-    gap = 3
-    calendar_x = 142
-    calendar_y = 236
-    calendar_markup: list[str] = []
-    weeks = calendar.get("weeks", [])[-53:]
-    for week_index, week in enumerate(weeks):
-        for item in week.get("contributionDays", []):
-            level = LEVEL_INDEX.get(item["contributionLevel"], 0)
-            x = calendar_x + week_index * (square + gap)
-            y = calendar_y + int(item["weekday"]) * (square + gap)
-            title = f"{item['date']}: {item['contributionCount']} contribuições"
-            calendar_markup.append(
-                f'<rect x="{x}" y="{y}" width="{square}" height="{square}" rx="2" '
-                f'fill="{theme["levels"][level]}"><title>{esc(title)}</title></rect>'
-            )
-
-    months_markup: list[str] = []
-    seen_months: set[tuple[int, int]] = set()
-    for week_index, week in enumerate(weeks):
-        contribution_days = week.get("contributionDays", [])
-        if not contribution_days:
-            continue
-        first = date.fromisoformat(contribution_days[0]["date"])
-        key = (first.year, first.month)
-        if key in seen_months:
-            continue
-        seen_months.add(key)
-        label = ["", "Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"][first.month]
-        x = calendar_x + week_index * (square + gap)
-        months_markup.append(f'<text x="{x}" y="218" class="month">{label}</text>')
-
-    detail_y = 362
-    detail_items = [
-        ("Sequência atual", f"{current_streak} dias"),
-        ("Maior sequência", f"{longest_streak} dias"),
-        ("Dias ativos", f"{active_days} / {len(days)}"),
-        ("Dia mais ativo", f"{busiest.count} em {busiest.value.strftime('%d/%m/%Y')}"),
-        ("Repositórios públicos", public_repositories),
-    ]
-    detail_width = 172
-    detail_gap = 13
-    detail_markup = "".join(
-        metric_card(28 + index * (detail_width + detail_gap), detail_y, detail_width, label, value, theme)
-        for index, (label, value) in enumerate(detail_items)
-    )
-
-    external_markup = ""
-    if external:
-        items = []
-        for name, url, count in external[:3]:
-            items.append(
-                f'<a href="{esc(url)}"><text class="repo" '
-                f'x="{28 + len(items) * 300}" y="512">{esc(name)} · {count}</text></a>'
-            )
-        external_markup = (
-            '<text x="28" y="482" class="section">Contribuições em outros projetos</text>'
-            + "".join(items)
-        )
-
-    generated_at = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
-    subtitle = f"Últimos 12 meses · dados oficiais da API do GitHub · atualizado em {generated_at}"
-
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-labelledby="title desc">
-  <title id="title">Atividade de {esc(user.get('name') or user['login'])} no GitHub</title>
-  <desc id="desc">Resumo personalizado de contribuições, commits, pull requests, revisões, issues e calendário de atividade.</desc>
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="980" height="330" viewBox="0 0 980 330" role="img" aria-labelledby="title desc">
+  <title id="title">Linguagens e atividade de {esc(user.get('name') or user['login'])} no GitHub</title>
+  <desc id="desc">Distribuição das linguagens nos repositórios acessíveis e contribuições mensais dos últimos doze meses.</desc>
   <style>
     text {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: {theme['text']}; }}
-    .heading {{ font-size: 24px; font-weight: 650; }}
-    .subtitle, .month {{ font-size: 12px; fill: {theme['muted']}; }}
-    .label {{ font-size: 12px; fill: {theme['muted']}; }}
-    .value {{ font-size: 22px; font-weight: 650; fill: {theme['accent']}; }}
-    .section {{ font-size: 15px; font-weight: 600; }}
-    .repo {{ font-size: 13px; fill: {theme['accent']}; }}
-    a:hover .repo {{ text-decoration: underline; }}
+    .heading {{ font-size: 19px; font-weight: 650; }}
+    .label {{ font-size: 13px; font-weight: 550; }}
+    .muted, .small {{ font-size: 11px; fill: {theme['muted']}; }}
+    .count {{ font-size: 10px; font-weight: 600; fill: {theme['muted']}; }}
   </style>
-  <rect x="0.5" y="0.5" width="979" height="{height - 1}" rx="10" fill="{theme['background']}" stroke="{theme['border']}"/>
-  <text x="28" y="42" class="heading">Atividade no GitHub</text>
-  <text x="28" y="66" class="subtitle">{esc(subtitle)}</text>
-  {card_markup}
-  <text x="28" y="218" class="section">Calendário de contribuições</text>
-  <text x="28" y="251" class="label">Dom</text>
-  <text x="28" y="279" class="label">Ter</text>
-  <text x="28" y="307" class="label">Qui</text>
-  <text x="28" y="335" class="label">Sáb</text>
-  {''.join(months_markup)}
-  {''.join(calendar_markup)}
-  {detail_markup}
-  {external_markup}
+  <text x="28" y="32" class="heading">Linguagens mais usadas</text>
+  <text x="28" y="53" class="muted">Por volume de código · {esc(access_note)}</text>
+  {language_chart(languages, theme)}
+  <line x1="486" y1="22" x2="486" y2="306" stroke="{theme['grid']}"/>
+  <text x="526" y="32" class="heading">Atividade mensal</text>
+  <text x="526" y="53" class="muted">{esc(activity_note)}</text>
+  {activity_chart(months, theme)}
+  <text x="28" y="318" class="muted">Dados da API oficial do GitHub · linguagens indicam distribuição de código, não nível de habilidade · atualizado em {generated}</text>
 </svg>
 """
 
