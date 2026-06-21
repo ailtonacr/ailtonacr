@@ -56,7 +56,7 @@ jobs:
 
       - name: Commit updated metrics
         run: |
-          if git diff --quiet -- assets/; then
+          if [[ -z "$(git status --porcelain -- assets/)" ]]; then
             echo "Metrics are already up to date."
             exit 0
           fi
