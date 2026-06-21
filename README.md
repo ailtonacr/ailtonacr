@@ -69,20 +69,14 @@ em sistemas previsíveis e integrados a produtos reais.
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://github-readme-stats.vercel.app/api?username=ailtonacr&show_icons=true&hide_border=true&bg_color=00000000&title_color=58A6FF&text_color=C9D1D9&icon_color=58A6FF&locale=pt-br">
-  <source media="(prefers-color-scheme: light)" srcset="https://github-readme-stats.vercel.app/api?username=ailtonacr&show_icons=true&hide_border=true&bg_color=00000000&title_color=0969DA&text_color=24292F&icon_color=0969DA&locale=pt-br">
-  <img height="170" alt="Estatísticas públicas de Ailton Rodrigues no GitHub" src="https://github-readme-stats.vercel.app/api?username=ailtonacr&show_icons=true&hide_border=true&bg_color=00000000&locale=pt-br">
-</picture>
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://github-readme-activity-graph.vercel.app/graph?username=ailtonacr&bg_color=00000000&color=C9D1D9&line=58A6FF&point=FFFFFF&area=true&area_color=58A6FF&hide_border=true&custom_title=Contribuicoes%20recentes">
-  <source media="(prefers-color-scheme: light)" srcset="https://github-readme-activity-graph.vercel.app/graph?username=ailtonacr&bg_color=00000000&color=24292F&line=0969DA&point=24292F&area=true&area_color=0969DA&hide_border=true&custom_title=Contribuicoes%20recentes">
-  <img alt="Gráfico de contribuições recentes de Ailton Rodrigues" src="https://github-readme-activity-graph.vercel.app/graph?username=ailtonacr&hide_border=true&custom_title=Contribuicoes%20recentes">
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/github-activity-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="./assets/github-activity-light.svg">
+  <img width="100%" alt="Atividade personalizada de Ailton Rodrigues no GitHub" src="./assets/github-activity-light.svg">
 </picture>
 
 </div>
 
-> As estatísticas consideram principalmente a atividade pública disponível no GitHub.
+> Métricas geradas diariamente a partir da API oficial do GitHub. Atividades privadas aparecem somente como valores agregados.
 
 ---
 
