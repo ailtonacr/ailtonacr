@@ -33,7 +33,7 @@ jobs:
 
       - name: Generate metrics
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
           GITHUB_USERNAME: ailtonacr
         run: python scripts/generate_metrics.py
 
