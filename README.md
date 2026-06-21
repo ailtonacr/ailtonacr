@@ -64,19 +64,17 @@ em sistemas previsíveis e integrados a produtos reais.
 
 [Conhecer o projeto de agentes](https://github.com/ailtonacr/ai-agents)
 
-## Atividade no GitHub
+## Código e atividade
 
 <div align="center">
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./assets/github-activity-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="./assets/github-activity-light.svg">
-  <img width="100%" alt="Atividade personalizada de Ailton Rodrigues no GitHub" src="./assets/github-activity-light.svg">
+  <img width="100%" alt="Linguagens mais usadas e atividade mensal de Ailton Rodrigues no GitHub" src="./assets/github-activity-light.svg">
 </picture>
 
 </div>
-
-> Métricas geradas diariamente a partir da API oficial do GitHub. Atividades privadas aparecem somente como valores agregados.
 
 ---
 
